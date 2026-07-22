@@ -2,7 +2,11 @@
 import os
 
 # not ideal to put that here
-os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
+# NOTE: use setdefault so an externally-provided CUDA_HOME wins. On Blackwell
+# (sm_120) the env's own nvcc is too old to compile gsplat's JIT kernels, so the
+# caller must point CUDA_HOME at a CUDA >= 12.8 toolkit. Falls back to the old
+# behaviour when CUDA_HOME is unset.
+os.environ.setdefault("CUDA_HOME", os.environ["CONDA_PREFIX"])
 os.environ["LIDRA_SKIP_INIT"] = "true"
 
 from typing import Union, Optional, List, Callable
@@ -97,6 +101,12 @@ class Inference:
         pointmap=None,
     ) -> dict:
         image = self.merge_mask_to_rgba(image, mask)
+        # REST3D_SKIP_LAYOUT_POSTOPT=1 disables the Stage-2 layout post-optimization, whose
+        # GS variant renders ~80k gaussians via gsplat and is the memory peak that OOMs a
+        # 12GB card / OS-OOM-kills a 30GB box. It only refines each object's pose to match
+        # the 2D image; Stage 3's CEM physics re-optimizes all poses for stability anyway,
+        # and the mesh geometry is unaffected. Opt-in so a >=32GB GPU keeps upstream behavior.
+        _layout_postopt = os.environ.get("REST3D_SKIP_LAYOUT_POSTOPT") != "1"
         return self._pipeline.run(
             image,
             None,
@@ -104,7 +114,7 @@ class Inference:
             stage1_only=False,
             with_mesh_postprocess=False,
             with_texture_baking=False,
-            with_layout_postprocess=True,
+            with_layout_postprocess=_layout_postopt,
             use_vertex_color=True,
             stage1_inference_steps=None,
             pointmap=pointmap,

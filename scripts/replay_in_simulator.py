@@ -37,6 +37,8 @@ def config_args():
                     help="Physics settle steps")
     ap.add_argument("--headless", action="store_true",
                     help="Run without interactive viewer")
+    ap.add_argument("--gpu_physics", action="store_true",
+                    help="Use GPU PhysX (default CPU; GPU is impossible on Blackwell sm_120)")
     ap.add_argument("--save_video", action="store_true", default=True)
     ap.add_argument("--no_save_video", dest="save_video", action="store_false",
                     help="Disable MP4 saving")
@@ -314,6 +316,7 @@ def replay(args):
         headless=headless,
         num_position_iterations=args.num_position_iterations,
         max_depenetration_velocity=args.max_depenetration_velocity,
+        use_gpu_physics=args.gpu_physics,
     )
 
     # ---- load assets ------------------------------------------------

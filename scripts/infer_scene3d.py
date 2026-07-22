@@ -1,4 +1,5 @@
 import os, sys
+import gc
 import json
 import copy
 import traceback
@@ -7,6 +8,7 @@ import numpy as np
 import argparse
 from glob import glob
 import trimesh
+import torch
 import shutil
 from collections import defaultdict, deque
 
@@ -114,29 +116,44 @@ def inference_mesh_with_cache(image, masks_list, object_names, output_obj_dir, o
             logger.info(f"No cache found, running SAM3D inference...")
             logger.info(f"{'='*60}\n")
 
-        # Run SAM3D inference
-        outputs = []
-        for mask_path in masks_list:
+        # Run SAM3D inference, one object at a time, extracting everything downstream
+        # needs (CPU trimesh + numpy bbox/axes) and releasing each object's GPU-resident
+        # decoded mesh/gaussians BEFORE the next object. The previous code appended every
+        # full output to `outputs` and only extracted after the loop, which pinned all N
+        # objects' tensors in VRAM at once and OOM'd on a 12GB card at object 3/7. The
+        # helpers below process outputs independently, so per-object == batched, losslessly.
+        ori_results['meshes'] = []
+        for mask_path, obj_name in zip(masks_list, object_names):
             logger.info(f'------>    processing mask: {mask_path}')
             mask = load_mask(mask_path)
             output = inference(image, mask, seed=42)
-            outputs.append(output.copy())
 
-        # Save raw pre-transform GLB meshes for debugging
-        if args.debug_raw_mesh:
-            raw_mesh_dir = os.path.join(os.path.dirname(os.path.dirname(output_obj_dir)), "debug_raw_glb")
-            os.makedirs(raw_mesh_dir, exist_ok=True)
-            for obj_name, output in zip(object_names, outputs):
+            # Save raw pre-transform GLB mesh for debugging (this object only)
+            if args.debug_raw_mesh:
                 glb = output.get("glb")
                 if glb is not None:
+                    raw_mesh_dir = os.path.join(os.path.dirname(os.path.dirname(output_obj_dir)), "debug_raw_glb")
+                    os.makedirs(raw_mesh_dir, exist_ok=True)
                     raw_path = os.path.join(raw_mesh_dir, f"{obj_name}_raw.obj")
-                    glb_copy = copy.deepcopy(glb)
-                    glb_copy.export(raw_path)
-            logger.info(f"Saved raw pre-transform GLB meshes to {raw_mesh_dir}")
+                    copy.deepcopy(glb).export(raw_path)
 
-        # Export meshes from SAM3D outputs
-        ori_results['meshes'] = make_scene_untextured_mesh(*outputs)
-        ori_results['bboxes'], ori_results['axes'] = get_object_bboxes_from_outputs(*outputs)
+            # Extract to CPU. make_scene_untextured_mesh returns [mesh] (or None if this
+            # object's glb is None — matching the old code, which skipped such objects);
+            # get_object_bboxes_from_outputs returns ([bbox], [axes]) as numpy.
+            _meshes = make_scene_untextured_mesh(output)
+            _bboxes, _axes = get_object_bboxes_from_outputs(output)
+            if _meshes:
+                ori_results['meshes'].append(_meshes[0])
+            ori_results['bboxes'].append(_bboxes[0])
+            ori_results['axes'].append(_axes[0])
+
+            # Release this object's GPU tensors before the next iteration.
+            del output, _meshes
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        if args.debug_raw_mesh:
+            logger.info("Saved raw pre-transform GLB meshes")
 
         # Save raw meshes to cache
         logger.info(f"\nSaving {len(ori_results['meshes'])} raw meshes...")

@@ -68,14 +68,18 @@ def set_viewer_camera_to_scene(gym, viewer, center, radius,
 def create_sim_and_viewer(ig, headless=False, max_gpu_contact_pairs=None,
                           viewer_width=1920, viewer_height=1080,
                           num_position_iterations=6,
-                          max_depenetration_velocity=5):
+                          max_depenetration_velocity=5,
+                          use_gpu_physics=False):
     params = gymapi.SimParams()
     params.dt = 1 / 60
     params.substeps = 2
     params.up_axis = gymapi.UP_AXIS_Y
     params.gravity = gymapi.Vec3(0.0, -9.8, 0.0)
-    params.use_gpu_pipeline = True
-    params.physx.use_gpu = True
+    # use_gpu_physics=False runs PhysX on CPU. Required on Blackwell (sm_120), whose
+    # kernels are absent from Isaac Gym Preview 4's libPhysXGpu_64.so; the tensor API
+    # below works identically on the CPU pipeline (root_states just lands on cpu).
+    params.use_gpu_pipeline = use_gpu_physics
+    params.physx.use_gpu = use_gpu_physics
     params.physx.solver_type = 1
     params.physx.num_position_iterations = num_position_iterations
     params.physx.num_velocity_iterations = 1
@@ -88,7 +92,12 @@ def create_sim_and_viewer(ig, headless=False, max_gpu_contact_pairs=None,
     params.physx.max_gpu_contact_pairs = max_gpu_contact_pairs
     _mb = max_gpu_contact_pairs * 256 // 1024 // 1024
     _logger.info(f"[Sim] max_gpu_contact_pairs = {max_gpu_contact_pairs} (~{_mb} MB GPU est.)")
-    sim = ig.create_sim(0, 0, gymapi.SIM_PHYSX, params)
+    # graphics_device_id = -1 (no graphics context) when headless. On Blackwell (sm_120)
+    # the GPU can't init Isaac Gym's graphics anyway, and headless physics never needs it;
+    # a viewer (non-headless) still requests device 0, though the GPU viewer can't run here
+    # either -- use --viser for visualization instead.
+    _graphics_device = 0 if not headless else -1
+    sim = ig.create_sim(0, _graphics_device, gymapi.SIM_PHYSX, params)
     if sim is None:
         raise RuntimeError("Failed to create sim")
     plane = gymapi.PlaneParams()
@@ -502,7 +511,8 @@ class MultiEnvCEMPlacement:
             self.ig, args.headless, max_gpu_contact_pairs=_contact_pairs,
             viewer_width=1920, viewer_height=1080,
             num_position_iterations=getattr(args, "num_position_iterations", 6),
-            max_depenetration_velocity=getattr(args, "max_depenetration_velocity", 5))
+            max_depenetration_velocity=getattr(args, "max_depenetration_velocity", 5),
+            use_gpu_physics=getattr(args, "use_gpu_physics", False))
 
         _loaded_mesh = {k: v for k, v in self.mesh_info.items()
                         if k in self.fixed_obj_names or k in self.movable_obj_names}

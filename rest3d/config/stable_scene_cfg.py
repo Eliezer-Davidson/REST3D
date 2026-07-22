@@ -19,6 +19,11 @@ class StableSceneCfg:
     headless: bool = True
     num_position_iterations: int = 6
     max_depenetration_velocity: float = 5.0
+    # Blackwell (sm_120) ships no GPU-PhysX kernels in Isaac Gym Preview 4, so the GPU
+    # pipeline dies with "no kernel image is available". CPU PhysX runs the CEM tensor
+    # API correctly and fast enough here. Default off; set True only on a GPU whose
+    # arch Isaac Gym's libPhysXGpu_64.so supports (sm_50-80).
+    use_gpu_physics: bool = False
 
     # ----------------------------------------------------------------
     # Output control

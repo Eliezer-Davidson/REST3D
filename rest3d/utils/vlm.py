@@ -92,7 +92,8 @@ def generate_vlm_response_gpt4o(messages, save_dir=None, save_name='test'):
 
 
 def generate_vlm_response_gemini(messages, save_dir=None, save_name="test",
-                                 model="gemini-3-flash-preview", max_retries=5):
+                                 model=os.getenv("REST3D_GEMINI_MODEL", "gemini-3-flash-preview"),
+                                 max_retries=int(os.getenv("REST3D_VLM_MAX_RETRIES", "8"))):
     """Generate response using Gemini via Google API (uses requests, no google-generativeai package needed)"""
     from google import genai
     import time
@@ -140,7 +141,19 @@ def generate_vlm_response_gemini(messages, save_dir=None, save_name="test",
             if attempt == max_retries - 1:
                 raise RuntimeError(f"Gemini API call failed after {max_retries} attempts: {e}")
             is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-            wait = (60 * (2 ** attempt)) if is_rate_limit else 10
+            # 503/UNAVAILABLE ("high demand") and dropped connections are just as transient
+            # as a 429, but a flat 10s x 5 tries tolerates only ~40s of a spike. A scene
+            # makes dozens of VLM calls, so one unlucky spike kills the whole run mid-way;
+            # back off exponentially for these too (capped at 2 min).
+            is_transient = any(s in str(e) for s in
+                               ("503", "UNAVAILABLE", "500", "INTERNAL", "504", "DEADLINE",
+                                "Network is unreachable", "Connection", "timed out"))
+            if is_rate_limit:
+                wait = 60 * (2 ** attempt)
+            elif is_transient:
+                wait = min(120, 10 * (2 ** attempt))
+            else:
+                wait = 10
             print(f"⚠️ API call failed (attempt {attempt+1}/{max_retries}), waiting {wait}s... {e}")
             time.sleep(wait)
 
