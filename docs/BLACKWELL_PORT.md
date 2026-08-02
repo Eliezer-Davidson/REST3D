@@ -9,6 +9,27 @@ Validated 2026-07-21/22 on a real capture: 7 objects, all stages exit 0, final s
 physically stable (CEM penetration 0), exported to MuJoCo + Isaac Sim and settle-tested
 in both.
 
+## Provenance — this checkout is a REFERENCE, do not develop in it
+
+Verified 2026-08-01:
+
+- Upstream is intact. `origin/master` (ShirleyMaxx/REST3D, "code release") resolves
+  to `16799558` and is an ancestor of `HEAD` — no upstream history was rewritten.
+- The port is one commit on top: `3e06390`, 14 files, +858/−24, all listed below.
+- The working tree carries exactly one uncommitted change, `.gitignore` +=
+  `.superpowers/`. No upstream source file is modified outside `3e06390`.
+- `HEAD == fork/blackwell-12gb`, so the port is pushed and backed up.
+
+Re-check with `git status --porcelain --untracked-files=no` (expect only
+`.gitignore`) and `git merge-base --is-ancestor origin/master HEAD`.
+
+REST3D is **CC BY-NC 4.0 — NonCommercial**. Nothing here may be copied into a
+product repo. The separate project is `../a separate project`; this checkout
+exists to produce reference output to compare against, and to run the exporters.
+When baselining against it, the parity target is `output/<scene>/stage3/global_scene`
+— **never `global_scene_v2`, which is a hand-edit and not produced by any code here**
+(`grep -rn global_scene_v2` over this tree returns zero hits).
+
 ## Environment
 
 The pinned cu121 stack cannot launch kernels on sm_120. This checkout runs:
