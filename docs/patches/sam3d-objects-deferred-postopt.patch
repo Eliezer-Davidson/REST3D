@@ -1,0 +1,109 @@
+diff --git a/sam3d_objects/pipeline/deferred_postopt.py b/sam3d_objects/pipeline/deferred_postopt.py
+new file mode 100644
+index 0000000..d72e22c
+--- /dev/null
++++ b/sam3d_objects/pipeline/deferred_postopt.py
+@@ -0,0 +1,45 @@
++# Deferred layout post-optimization runner (12 GB enablement, 2026-08-12).
++#
++# Counterpart to the SAM3D_DEFER_LAYOUT_POSTOPT_DIR capture mode in
++# inference_pipeline_pointmap.py: a bundle file holds the EXACT inputs the
++# in-loop call to InferencePipelinePointMap.run_post_optimization_GS would
++# have received; this module replays that call after the caller has released
++# the multi-GB model stack, so the optimization (which needs only ~1-2 GB)
++# never co-resides with the models. The math is identical by construction:
++# same function, same inputs, and layout_post_optimization_method_GS seeds
++# its own RNG (seed=100), so replays are deterministic.
++"""Run a captured layout post-opt bundle standalone."""
++import types
++
++import torch
++
++from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
++from sam3d_objects.pipeline.inference_utils import layout_post_optimization_method_GS
++
++
++def run_deferred_postopt(bundle_path: str, device: str | None = None) -> dict:
++    """Load a capture bundle and run the deferred GS layout post-optimization.
++
++    Returns run_post_optimization_GS's dict verbatim:
++    {rotation, translation, scale, iou, iou_before_optim, optim_accepted}.
++    """
++    if device is None:
++        device = "cuda" if torch.cuda.is_available() else "cpu"
++    bundle = torch.load(bundle_path, map_location=device, weights_only=False)
++
++    # run_post_optimization_GS only touches self.device, self.refine_scale and
++    # self.layout_post_optimization_method_GS -- a shim stands in for the
++    # pipeline so no model ever loads here.
++    shim = types.SimpleNamespace(
++        device=torch.device(device),
++        layout_post_optimization_method_GS=layout_post_optimization_method_GS,
++        refine_scale=lambda s: InferencePipelinePointMap.refine_scale(None, s),
++    )
++    return InferencePipelinePointMap.run_post_optimization_GS(
++        shim,
++        bundle["gs"],
++        bundle["intrinsics"],
++        bundle["pose"],
++        bundle["layout_input"],
++        backend=bundle.get("backend", "gsplat"),
++    )
+diff --git a/sam3d_objects/pipeline/inference_pipeline_pointmap.py b/sam3d_objects/pipeline/inference_pipeline_pointmap.py
+index f557834..0053302 100644
+--- a/sam3d_objects/pipeline/inference_pipeline_pointmap.py
++++ b/sam3d_objects/pipeline/inference_pipeline_pointmap.py
+@@ -469,16 +469,43 @@ class InferencePipelinePointMap(InferencePipeline):
+                         gs_input is not None
+                         and self.layout_post_optimization_method_GS is not None
+                     ):
+-                        logger.info("Running GS layout post optimization method...")
+-                        postprocessed_pose = self.run_post_optimization_GS(
+-                            deepcopy(gs_input[0]),
+-                            pointmap_dict["intrinsics"],
+-                            ss_return_dict,
+-                            ss_input_dict,
+-                            backend="gsplat",
+-                        )
+-                        ss_return_dict.update(postprocessed_pose)
+-                        logger.info(f"Finished GS post-optimization!")
++                        # SAM3D_DEFER_LAYOUT_POSTOPT_DIR (12 GB enablement, 2026-08-12):
++                        # capture the EXACT inputs of run_post_optimization_GS to a
++                        # bundle file instead of optimizing here, so the caller can
++                        # replay the identical computation after the model stack is
++                        # released (deferred_postopt.run_deferred_postopt). The
++                        # optimization itself needs ~1-2 GB; running it in-loop while
++                        # the models are resident is what OOMs a 12 GB card. With the
++                        # env var unset this branch is byte-identical to upstream.
++                        import os as _os
++                        _defer_dir = _os.environ.get("SAM3D_DEFER_LAYOUT_POSTOPT_DIR")
++                        if _defer_dir:
++                            from uuid import uuid4
++                            _os.makedirs(_defer_dir, exist_ok=True)
++                            _bp = _os.path.join(_defer_dir, f"{uuid4().hex}.pt")
++                            torch.save({
++                                "gs": gs_input[0],
++                                "intrinsics": pointmap_dict["intrinsics"],
++                                "pose": {k: ss_return_dict[k]
++                                         for k in ("rotation", "translation", "scale")},
++                                "layout_input": {k: ss_input_dict[k]
++                                                 for k in ("rgb_image_mask", "rgb_image",
++                                                           "rgb_pointmap_unnorm")},
++                                "backend": "gsplat",
++                            }, _bp)
++                            ss_return_dict["postopt_deferred"] = _bp
++                            logger.info(f"Layout post-opt DEFERRED -> {_bp}")
++                        else:
++                            logger.info("Running GS layout post optimization method...")
++                            postprocessed_pose = self.run_post_optimization_GS(
++                                deepcopy(gs_input[0]),
++                                pointmap_dict["intrinsics"],
++                                ss_return_dict,
++                                ss_input_dict,
++                                backend="gsplat",
++                            )
++                            ss_return_dict.update(postprocessed_pose)
++                            logger.info(f"Finished GS post-optimization!")
+                     elif (
+                         glb is not None
+                         and self.layout_post_optimization_method is not None

@@ -122,6 +122,19 @@ def inference_mesh_with_cache(image, masks_list, object_names, output_obj_dir, o
         # full output to `outputs` and only extracted after the loop, which pinned all N
         # objects' tensors in VRAM at once and OOM'd on a 12GB card at object 3/7. The
         # helpers below process outputs independently, so per-object == batched, losslessly.
+        #
+        # Deferred layout post-opt (12 GB enablement, 2026-08-12): with the skip flag
+        # unset, post-opt IS requested, but the patched pipeline CAPTURES its inputs to a
+        # bundle per object instead of optimizing in-loop (the in-loop run co-resident
+        # with the model stack is what OOMs 12 GB). After the loop the models are
+        # released and each bundle is replayed -- identical math, different time. See
+        # sam-3d-objects/sam3d_objects/pipeline/deferred_postopt.py.
+        _defer_dir = None
+        _deferred = []   # (obj_name, raw_glb, bundle_path, mesh_idx, bbox_idx)
+        if os.environ.get("REST3D_SKIP_LAYOUT_POSTOPT") != "1":
+            import tempfile
+            _defer_dir = tempfile.mkdtemp(prefix="rest3d_postopt_")
+            os.environ["SAM3D_DEFER_LAYOUT_POSTOPT_DIR"] = _defer_dir
         ori_results['meshes'] = []
         for mask_path, obj_name in zip(masks_list, object_names):
             logger.info(f'------>    processing mask: {mask_path}')
@@ -147,6 +160,15 @@ def inference_mesh_with_cache(image, masks_list, object_names, output_obj_dir, o
             ori_results['bboxes'].append(_bboxes[0])
             ori_results['axes'].append(_axes[0])
 
+            # A captured bundle means this object's pose must be re-derived after
+            # the deferred replay; keep the raw glb (make_scene_untextured_mesh
+            # deepcopies, so it is untouched) and the entry indices to replace.
+            if _defer_dir and output.get("postopt_deferred") and _meshes:
+                _deferred.append((obj_name, output["glb"],
+                                  output["postopt_deferred"],
+                                  len(ori_results['meshes']) - 1,
+                                  len(ori_results['bboxes']) - 1))
+
             # Release this object's GPU tensors before the next iteration.
             del output, _meshes
             gc.collect()
@@ -154,6 +176,48 @@ def inference_mesh_with_cache(image, masks_list, object_names, output_obj_dir, o
 
         if args.debug_raw_mesh:
             logger.info("Saved raw pre-transform GLB meshes")
+
+        # Replay the deferred post-opts with the model stack RELEASED (this is
+        # the whole point of deferral), then swap the refined pose extractions
+        # into ori_results so the cache below stores refined meshes.
+        if _defer_dir:
+            os.environ.pop("SAM3D_DEFER_LAYOUT_POSTOPT_DIR", None)
+            if _deferred:
+                logger.info(f"Releasing SAM3D pipeline before {len(_deferred)} deferred post-opt replays...")
+                inference._pipeline = None
+                gc.collect()
+                torch.cuda.empty_cache()
+                from sam3d_objects.pipeline.deferred_postopt import run_deferred_postopt
+                for _name, _glb, _bundle, _mi, _bi in _deferred:
+                    # Per-object fault isolation, matching upstream's own
+                    # try/except around in-loop post-opt: a failed replay keeps
+                    # that object's unrefined pose instead of killing the stage.
+                    try:
+                        rev = run_deferred_postopt(_bundle)
+                    except Exception as e:
+                        logger.error(f"  {_name}: deferred post-opt failed, keeping "
+                                     f"unrefined pose: {e}", exc_info=True)
+                        continue
+                    logger.info(f"  {_name}: post-opt IoU {float(rev['iou_before_optim']):.3f}"
+                                f" -> {float(rev['iou']):.3f}"
+                                f" ({'accepted' if rev['optim_accepted'] else 'kept original'})")
+                    _b = torch.load(_bundle, map_location="cpu", weights_only=False)
+                    refined = {
+                        "glb": _glb,
+                        "gaussian": [_b["gs"]],
+                        "rotation": torch.as_tensor(rev["rotation"]).reshape(1, 4).detach().cpu(),
+                        "translation": torch.as_tensor(rev["translation"]).reshape(1, 3).detach().cpu(),
+                        "scale": torch.as_tensor(rev["scale"]).reshape(1, 3).detach().cpu(),
+                    }
+                    _m = make_scene_untextured_mesh(refined)
+                    _bb, _ax = get_object_bboxes_from_outputs(refined)
+                    ori_results['meshes'][_mi] = _m[0]
+                    ori_results['bboxes'][_bi] = _bb[0]
+                    ori_results['axes'][_bi] = _ax[0]
+                    del _b, rev
+                    gc.collect()
+                    torch.cuda.empty_cache()
+            shutil.rmtree(_defer_dir, ignore_errors=True)
 
         # Save raw meshes to cache
         logger.info(f"\nSaving {len(ori_results['meshes'])} raw meshes...")

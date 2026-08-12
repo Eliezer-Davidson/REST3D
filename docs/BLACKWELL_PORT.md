@@ -52,19 +52,25 @@ separate py3.8 env with Isaac Gym Preview 4.
 | `scripts/export_usd_scene.py` | NEW: exported assets → Isaac Sim USD (RigidBodyAPI, convexHull colliders, vertex displayColor) |
 | `docs/patches/*.patch` | the low-VRAM edits to the vendored `sam-3d-objects/` and `sam3/` checkouts (those dirs are separate repos, so the diffs ship here as patches) |
 
-## Stage 2 on 12 GB — the five-flag recipe
+## Stage 2 on 12 GB — the four-flag recipe (post-opt now included, deferred)
 
 ```
 REST3D_HALF_WEIGHTS=1 REST3D_CPU_CONSTRUCT=1 REST3D_OFFLOAD_EMBEDDER=1 \
-REST3D_SKIP_LAYOUT_POSTOPT=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
 1. fp16 weights (decoders stay fp32 — they run outside autocast);
 2. construct models on CPU (kills a transient fp32-on-GPU spike);
 3. page the idle generators/embedder to RAM during mesh decode (~5.4 GB freed for the
    dense grid);
-4. skip the gaussian-splat layout post-optimization (the single biggest memory peak;
-   Stage 3 re-optimizes poses anyway — cost: image-space placement is looser);
+4. **layout post-opt runs DEFERRED (2026-08-12), no flag needed**: the alignment is a
+   pure function of per-object inputs (it optimizes only quat/translation/scale
+   through a gsplat render, ~1–2 GB alone), so the patched pipeline CAPTURES those
+   inputs to a bundle during the loop and `infer_scene3d.py` replays them after the
+   model stack is released — the co-residency that OOM'd 12 GB never happens, and
+   the math is identical (same function, same inputs, self-seeded RNG). The old
+   `REST3D_SKIP_LAYOUT_POSTOPT=1` still works and now means what it says: skip
+   post-opt entirely (every pre-2026-08-12 reference scene was built that way);
 5. the per-object prune above.
 
 Do NOT combine with `REST3D_CPU_OFFLOAD` on a ~30 GB-RAM machine — it stacks every
