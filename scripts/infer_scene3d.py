@@ -217,7 +217,12 @@ def inference_mesh_with_cache(image, masks_list, object_names, output_obj_dir, o
                     del _b, rev
                     gc.collect()
                     torch.cuda.empty_cache()
-            shutil.rmtree(_defer_dir, ignore_errors=True)
+            if os.environ.get("REST3D_KEEP_POSTOPT_BUNDLES") == "1":
+                # Verification aid: a kept bundle lets a probe replay the same
+                # alignment twice and prove determinism on real data.
+                logger.info(f"Keeping post-opt bundles in {_defer_dir}")
+            else:
+                shutil.rmtree(_defer_dir, ignore_errors=True)
 
         # Save raw meshes to cache
         logger.info(f"\nSaving {len(ori_results['meshes'])} raw meshes...")
