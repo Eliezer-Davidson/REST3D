@@ -2,11 +2,14 @@
 import os
 
 # not ideal to put that here
-# NOTE: use setdefault so an externally-provided CUDA_HOME wins. On Blackwell
-# (sm_120) the env's own nvcc is too old to compile gsplat's JIT kernels, so the
-# caller must point CUDA_HOME at a CUDA >= 12.8 toolkit. Falls back to the old
-# behaviour when CUDA_HOME is unset.
-os.environ.setdefault("CUDA_HOME", os.environ["CONDA_PREFIX"])
+# NOTE: an externally-provided CUDA_HOME wins. On Blackwell (sm_120) the env's
+# own nvcc is too old to compile gsplat's JIT kernels, so the caller must point
+# CUDA_HOME at a CUDA >= 12.8 toolkit. Falls back to the old behaviour when
+# CUDA_HOME is unset. Guarded lookup: setdefault evaluates its fallback
+# EAGERLY, and outside a conda-activated shell (systemd unit, cron) there is
+# no CONDA_PREFIX at all -- an unguarded index is an import-time KeyError.
+if "CUDA_HOME" not in os.environ and "CONDA_PREFIX" in os.environ:
+    os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
 os.environ["LIDRA_SKIP_INIT"] = "true"
 
 from typing import Union, Optional, List, Callable
