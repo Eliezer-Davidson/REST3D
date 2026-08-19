@@ -21,9 +21,19 @@ ap.add_argument("--source", default="labg4")
 ap.add_argument("--target", default="labg9")
 ap.add_argument("--fro", type=float, default=0.005, help="fluid rest offset (real-scale ~0.005)")
 ap.add_argument("--pco", type=float, default=0.009, help="particle contact offset")
+ap.add_argument("--pellets", type=int, default=450, help="target fluid particle count")
+ap.add_argument("--iso", type=int, default=1, help="1: skin a smooth isosurface over the fluid (visual only)")
+ap.add_argument("--src_xy", default="", help="move source cup center to this world 'x,y' (e.g. counter front edge)")
+ap.add_argument("--tgt_xy", default="", help="move target cup center to this world 'x,y'")
+ap.add_argument("--counter_front_y", type=float, default=None,
+                help="world y of the counter's front edge; the contact slab is clamped behind it")
 args = ap.parse_args()
 
-FOOT_PROTRUSION = 0.006  # how far the invisible ground-contact foot sticks below the glass base
+# How far the invisible ground-contact foot sticks below the glass base. Keep SMALL:
+# this is literally how high the glass visually floats above the counter. Any value
+# works geometrically (the foot's flat bottom is always below the domed base tip);
+# 6 mm read as an obvious hover in the GUI.
+FOOT_PROTRUSION = 0.002
 
 from isaacsim import SimulationApp
 app = SimulationApp({"headless": True})
@@ -59,22 +69,85 @@ for c in world.GetChildren():
         frozen += 1
 print(f"[fluid] froze {frozen} dynamic bodies -> static", flush=True)
 
+# 1a-bis) optionally move the cups (world XY of the GLASS CENTER). Added so the
+# cups can sit at the counter's FRONT edge, where a robot standing on open floor
+# can reach them — the original reconstruction placement is at the counter's back,
+# reachable only by standing inside the kneehole (= interpenetrating the counter,
+# which the overlap sanity gate forbids).
+for _nm, _spec in ((args.source, args.src_xy), (args.target, args.tgt_xy)):
+    if not _spec:
+        continue
+    _tx, _ty = [float(v) for v in _spec.split(",")]
+    _prim = stage.GetPrimAtPath(f"/World/{_nm}")
+    _b = bcache.ComputeWorldBound(_prim).ComputeAlignedBox()
+    _cx, _cy = 0.5 * (_b.GetMin()[0] + _b.GetMax()[0]), 0.5 * (_b.GetMin()[1] + _b.GetMax()[1])
+    _xf = UsdGeom.Xformable(_prim)
+    _op = next(o for o in _xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate)
+    _v = _op.Get()
+    _op.Set(Gf.Vec3d(_v[0] + (_tx - _cx), _v[1] + (_ty - _cy), _v[2]))
+    print(f"[fluid] moved {_nm}: center ({_cx:.3f},{_cy:.3f}) -> ({_tx:.3f},{_ty:.3f})", flush=True)
+    bcache.Clear()
 
-def ensure_support(name, prim):
-    """Flat, invisible, high-friction static slab flush under the cup base for stable contact."""
-    box = bcache.ComputeWorldBound(prim).ComputeAlignedBox()
+
+def build_counter_slab(surfs, centers):
+    """ONE invisible static box whose top is flush with the measured counter surface,
+    spanning the counter work area around the cups. The cups rest on THIS, never on
+    the reconstruction's decomposed convex hulls: contact-report tracing showed the
+    hull is a noisy contact partner (faceted edges, ±0.4 mm height noise) that kept
+    kicking the empty cup into a permanent skitter. Pairs cup<->cabinetry are
+    broadphase-filtered (see filter_cup_vs_counter), so this slab IS the counter for
+    the cups — make it big enough to cover anywhere the robot may set a cup down."""
+    top = float(np.mean(surfs)) + 0.0005
+    cx = float(np.mean([c[0] for c in centers]))
+    cy = float(np.mean([c[1] for c in centers]))
+    half_x = 0.30
+    # the slab must NEVER extend past the counter's front edge: invisible support
+    # hanging in open air is a scene lie (a cup set there would float; the robot's
+    # torso can graze it). Clamp the +y side at the counter edge.
+    y_lo = cy - 0.30
+    y_hi = min(cy + 0.30, args.counter_front_y - 0.005) if args.counter_front_y is not None else cy + 0.30
+    cy_s, half_y = 0.5 * (y_lo + y_hi), 0.5 * (y_hi - y_lo)
+    sp = "/World/counter_contact_slab"
+    cube = UsdGeom.Cube.Define(stage, sp)
+    cube.CreateSizeAttr(1.0)
+    xf = UsdGeom.Xformable(cube.GetPrim()); xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy_s, top - 0.01))     # half-height 0.01 -> top flush
+    xf.AddScaleOp().Set(Gf.Vec3f(2 * half_x, 2 * half_y, 0.02))
+    UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+    UsdShade.MaterialBindingAPI(cube.GetPrim()).Bind(grip, materialPurpose="physics")
+    UsdGeom.Imageable(cube.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    print(f"[fluid] counter contact slab: top z={top:.4f}, {2*half_x:.2f} x {2*half_y:.2f} m at ({cx:.3f},{cy_s:.3f})", flush=True)
+    return top
+
+
+def filter_cup_vs_counter(name):
+    """Make the cup ignore the cabinetry's decomposed hull colliders entirely.
+    The flush counter_contact_slab stands in for the counter surface."""
+    cup = stage.GetPrimAtPath(f"/World/{name}")
+    box = bcache.ComputeWorldBound(cup).ComputeAlignedBox()
     mn, mx = box.GetMin(), box.GetMax()
     cx, cy, base = 0.5 * (mn[0] + mx[0]), 0.5 * (mn[1] + mx[1]), float(mn[2])
-    sp = f"/World/{name}_base_support"
-    if not stage.GetPrimAtPath(sp).IsValid():
-        cube = UsdGeom.Cube.Define(stage, sp)
-        cube.CreateSizeAttr(1.0)
-        xf = UsdGeom.Xformable(cube.GetPrim()); xf.ClearXformOpOrder()
-        xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, base - 0.003))
-        xf.AddScaleOp().Set(Gf.Vec3f(0.06, 0.06, 0.004))
-        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        UsdShade.MaterialBindingAPI(cube.GetPrim()).Bind(grip, materialPurpose="physics")
-        UsdGeom.Imageable(cube.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    targets = set()
+    for p in stage.Traverse():
+        if not p.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        pp = str(p.GetPath())
+        top_owner = "/".join(pp.split("/")[:3])
+        if top_owner.startswith(f"/World/{name}") or "labg" in top_owner or "slab" in pp:
+            continue
+        m = UsdGeom.Mesh(p)
+        if not m or not m.GetPointsAttr().Get():
+            continue
+        M = np.array(_xc.GetLocalToWorldTransform(p), dtype=np.float64)
+        V = (np.array([[q[0], q[1], q[2], 1.0] for q in m.GetPointsAttr().Get()]) @ M)[:, :3]
+        if (V[:, 0].min() < cx < V[:, 0].max() and V[:, 1].min() < cy < V[:, 1].max()
+                and V[:, 2].min() < base and V[:, 2].max() > base - 0.30):
+            targets.add(top_owner)
+    api = UsdPhysics.FilteredPairsAPI.Apply(cup)
+    rel = api.CreateFilteredPairsRel()
+    for t in sorted(targets):
+        rel.AddTarget(Sdf.Path(t))
+    print(f"[fluid] {name}: collision-filtered against {sorted(targets)}", flush=True)
 
 
 def make_sdf_cup(name):
@@ -178,17 +251,19 @@ def reseat_on_counter(name):
     cx, cy, base, top = 0.5 * (mn[0] + mx[0]), 0.5 * (mn[1] + mx[1]), float(mn[2]), float(mx[2])
     surf = _surface_under(cx, cy, top)
     if surf is None:
-        print(f"[fluid] reseat {name}: no counter found under it, left as-is", flush=True); return
+        print(f"[fluid] reseat {name}: no counter found under it, left as-is", flush=True); return None
     # the invisible foot is excluded from the bbox, so the cup's TRUE lowest point is
-    # (glass base - foot protrusion). Land THAT on the counter so the foot doesn't
-    # interpenetrate (which was launching the empty cup and sloshing fluid out).
-    delta = (surf + 0.002) - (base - FOOT_PROTRUSION)
+    # (glass base - foot protrusion). Land THAT just above the counter so the foot
+    # neither interpenetrates (depenetration launch) nor hovers visibly.
+    delta = (surf + 0.0005) - (base - FOOT_PROTRUSION)
     xf = UsdGeom.Xformable(prim)
     op = next((o for o in xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate), None)
     if op is None:
         op = xf.AddTranslateOp(); op.Set(Gf.Vec3d(0, 0, 0))
     cur = op.Get(); op.Set(Gf.Vec3d(cur[0], cur[1], cur[2] + delta))
-    print(f"[fluid] reseat {name}: base {base:.3f}->{surf+0.003:.3f} (counter z={surf:.3f}, delta {delta:+.3f})", flush=True)
+    print(f"[fluid] reseat {name}: glass base -> {surf + 0.0005 + FOOT_PROTRUSION:.4f} "
+          f"(counter z={surf:.4f}, delta {delta:+.4f})", flush=True)
+    return surf
 
 
 src_prim = make_sdf_cup(args.source)
@@ -197,13 +272,32 @@ print(f"[fluid] SDF + foot on {args.source} (source) + {args.target} (target)", 
 
 # reseat AFTER the foot exists -> the foot bottom (cup's lowest point) rests on the counter
 bcache.Clear()
-reseat_on_counter(args.source)
-reseat_on_counter(args.target)
+src_surf = reseat_on_counter(args.source)
+tgt_surf = reseat_on_counter(args.target)
 
-# flat high-friction static slab flush under each cup for a reliable contact surface
+# one flush counter slab for both cups + broadphase-filter the noisy cabinetry hulls
 bcache.Clear()
-ensure_support(args.source, src_prim)
-ensure_support(args.target, tgt_prim)
+if src_surf is not None and tgt_surf is not None:
+    _cs = []
+    for _n in (args.source, args.target):
+        _b = bcache.ComputeWorldBound(stage.GetPrimAtPath(f"/World/{_n}")).ComputeAlignedBox()
+        _cs.append((0.5 * (_b.GetMin()[0] + _b.GetMax()[0]), 0.5 * (_b.GetMin()[1] + _b.GetMax()[1])))
+    _slab_top = build_counter_slab([src_surf, tgt_surf], _cs)
+    # re-land each cup on the SLAB top (the mean-height slab can sit above a cup's
+    # locally-measured counter surface -> spawn interpenetration -> kick)
+    bcache.Clear()
+    for _n in (args.source, args.target):
+        _p = stage.GetPrimAtPath(f"/World/{_n}")
+        _b = bcache.ComputeWorldBound(_p).ComputeAlignedBox()
+        _foot_bottom = float(_b.GetMin()[2]) - FOOT_PROTRUSION
+        _dz = (_slab_top + 0.0005) - _foot_bottom
+        if abs(_dz) > 1e-6:
+            _xf = UsdGeom.Xformable(_p)
+            _op = next(o for o in _xf.GetOrderedXformOps() if o.GetOpType() == UsdGeom.XformOp.TypeTranslate)
+            _v = _op.Get(); _op.Set(Gf.Vec3d(_v[0], _v[1], _v[2] + _dz))
+            print(f"[fluid] {_n}: re-landed on slab ({_dz:+.4f})", flush=True)
+    filter_cup_vs_counter(args.source)
+    filter_cup_vs_counter(args.target)
 
 # 2) remove the SOURCE's fake liquid cylinder
 liq = stage.GetPrimAtPath(f"/World/{args.source}/liquid")
@@ -216,7 +310,12 @@ scene = stage.GetPrimAtPath("/World/PhysicsScene")
 sapi = PhysxSchema.PhysxSceneAPI.Apply(scene)
 sapi.CreateEnableGPUDynamicsAttr(True)
 sapi.CreateBroadphaseTypeAttr("GPU")
-print("[fluid] GPU dynamics enabled", flush=True)
+# author the physics rate INTO the asset: GUI Play (and any loader that honors the
+# stage) defaults to 60 Hz when unauthored, and at 60 Hz the cup/counter contact
+# solve is unstable — the cup gets launched off the counter at t=0, flinging the
+# fluid. At 120 Hz the same scene is stable (A/B'd 2026-08-07).
+sapi.CreateTimeStepsPerSecondAttr(120)
+print("[fluid] GPU dynamics enabled, physics rate authored at 120 Hz", flush=True)
 
 # 4) real PBD fluid inside the SOURCE cup cavity (cup has since been reseated)
 bcache.Clear()
@@ -234,16 +333,28 @@ particleUtils.add_physx_particle_system(
     enable_ccd=True, solver_position_iterations=16, max_velocity=8.0,
 )
 spacing = 2.0 * FRO
-# Start WELL above the glass bottom (base = cup min-z = foot bottom, ~6mm below the
-# glass base, whose interior floor is ~2cm higher still). Spawning in free space up
-# in the cavity lets particles FALL and settle, instead of starting embedded in the
-# solid glass base and phasing straight through it.
-lower = Gf.Vec3f(cx - half, cy - half, base + 0.050)
-nx = ny = max(3, int((2 * half) / spacing))
-nz = 6
-_pos, _vel = particleUtils.create_particles_grid(lower, spacing, nx, ny, nz)
-positions = Vt.Vec3fArray(_pos)
-vels = Vt.Vec3fArray(_vel)
+# Circle-packed spawn column: a square grid's CORNERS cap the count (they hit the SDF
+# side walls first), a disc doesn't. Radius matches the proven square-corner envelope
+# (0.26*width ~ the old half*sqrt(2)). Spawn in free air above the interior floor so
+# nothing starts embedded in the solid glass base (finding #8).
+r_spawn = 0.26 * min(mx[0] - mn[0], mx[1] - mn[1])
+z0 = base + 0.030
+per_layer = sum(1 for ix in range(-8, 9) for iy in range(-8, 9)
+                if (ix * spacing) ** 2 + (iy * spacing) ** 2 <= r_spawn ** 2)
+zmax_spawn = top - 0.008  # keep the column top under the rim
+nz = min(max(1, -(-args.pellets // per_layer)), int((zmax_spawn - z0) / spacing))
+pts = []
+for iz in range(nz):
+    z = z0 + iz * spacing
+    for ix in range(-8, 9):
+        for iy in range(-8, 9):
+            x, y = ix * spacing, iy * spacing
+            if x * x + y * y <= r_spawn ** 2:
+                pts.append(Gf.Vec3f(cx + x, cy + y, z))
+positions = Vt.Vec3fArray(pts)
+vels = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * len(pts))
+print(f"[fluid] spawn: {per_layer}/layer x {nz} layers, r={r_spawn*1000:.1f}mm, "
+      f"z {z0:.3f}..{z0 + nz * spacing:.3f} (rim {top:.3f})", flush=True)
 particleUtils.add_physx_particleset_pointinstancer(
     stage, Sdf.Path("/World/fluid"), positions, vels, Sdf.Path("/World/fluidSystem"),
     self_collision=True, fluid=True, particle_group=0,
@@ -259,6 +370,29 @@ for pt in inst.GetPrototypesRel().GetTargets():
             Vt.Vec3fArray([Gf.Vec3f(0.10, 0.45, 0.95)]))
 print(f"[fluid] added {len(positions)} fluid particles in {args.source} "
       f"(cavity center {cx:.3f},{cy:.3f} base z={base:.3f})", flush=True)
+
+# 5) optional liquid look: PhysX isosurface — a smooth mesh skinned over the particles
+# every frame ON THE GPU. Purely a render-side layer: the same 444 pellets simulate
+# underneath, so containment/stability results carry over unchanged.
+if args.iso:
+    ps_prim = stage.GetPrimAtPath("/World/fluidSystem")
+    iso = PhysxSchema.PhysxParticleIsosurfaceAPI.Apply(ps_prim)
+    iso.CreateIsosurfaceEnabledAttr(True)
+    # gridSpacing / surfaceDistance / gridSmoothingRadius left at schema default
+    # (-inf = auto-derived from the particle system's offsets)
+    water = UsdShade.Material.Define(stage, "/World/Looks/waterIso")
+    wsh = UsdShade.Shader.Define(stage, "/World/Looks/waterIso/Shader")
+    wsh.CreateIdAttr("UsdPreviewSurface")
+    wsh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.08, 0.38, 0.85))
+    wsh.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.55)
+    wsh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.02)
+    wsh.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.33)
+    water.CreateSurfaceOutput().ConnectToSource(wsh.ConnectableAPI(), "surface")
+    # the runtime-generated isosurface mesh lives under the particle system and
+    # inherits its material binding; the raw pellet spheres get hidden
+    UsdShade.MaterialBindingAPI(ps_prim).Bind(water)
+    UsdGeom.Imageable(stage.GetPrimAtPath("/World/fluid")).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    print("[fluid] isosurface enabled + water material bound (pellet spheres hidden)", flush=True)
 
 stage.GetRootLayer().Save()
 print(f"[fluid] wrote {args.out_usd}", flush=True)

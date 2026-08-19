@@ -1,0 +1,138 @@
+<mujoco model="lab_demo_v2">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <visual><global offwidth="1920" offheight="1080"/>
+    <headlight ambient="0.45 0.45 0.45" diffuse="0.5 0.5 0.5" specular="0.2 0.2 0.2"/>
+    <quality shadowsize="4096"/></visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.82 0.86 0.92" rgb2="0.4 0.45 0.55" width="256" height="256"/>
+    <texture name="ft" type="2d" builtin="checker" rgb1="0.72 0.72 0.70" rgb2="0.64 0.64 0.62" width="512" height="512"/>
+    <material name="fm" texture="ft" texrepeat="10 10" reflectance="0.05"/>
+    <material name="wall" rgba="0.86 0.87 0.88 1"/>
+    <mesh name="beaker" file="/home/user/work/REST3D/lab_demo/props/beaker.obj"/>
+    <mesh name="flask" file="/home/user/work/REST3D/lab_demo/props/flask.obj"/>
+    <mesh name="vial" file="/home/user/work/REST3D/lab_demo/props/vial.obj"/>
+    <mesh name="tube" file="/home/user/work/REST3D/lab_demo/props/tube.obj"/>
+    <mesh name="rack" file="/home/user/work/REST3D/lab_demo/props/rack.obj"/>
+    <mesh name="h_centrifugeL" file="/home/user/work/REST3D/lab_demo/props/h_centrifugeL.obj"/>
+    <mesh name="h_centrifugeS" file="/home/user/work/REST3D/lab_demo/props/h_centrifugeS.obj"/>
+    <mesh name="h_centrifugeW" file="/home/user/work/REST3D/lab_demo/props/h_centrifugeW.obj"/>
+    <mesh name="h_fridge" file="/home/user/work/REST3D/lab_demo/props/h_fridge.obj"/>
+    <mesh name="h_stool" file="/home/user/work/REST3D/lab_demo/props/h_stool.obj"/>
+    <mesh name="h_labrack" file="/home/user/work/REST3D/lab_demo/props/h_labrack.obj"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 4.5" dir="0 0 -1" directional="true" diffuse="0.6 0.6 0.6"/>
+    <light pos="-3 -3 3.5" dir="0.6 0.6 -1" directional="true" diffuse="0.35 0.35 0.35"/>
+    <geom name="floor" type="plane" size="12 12 0.1" material="fm"/>
+    <geom name="wall_back" type="box" size="6 0.05 1.6" pos="0 3.8 1.6" material="wall"/>
+    <geom name="wall_left" type="box" size="0.05 4 1.6" pos="-4.2 0 1.6" material="wall"/>
+    <geom name="wall_right" type="box" size="0.05 4 1.6" pos="4.2 0 1.6" material="wall"/>
+    <body name="G1_standin" pos="0 -0.2 0">
+      <geom type="capsule" fromto="0 0 0.10 0 0 1.10" size="0.14" rgba="0.15 0.16 0.18 1"/>
+      <geom type="sphere" size="0.12" pos="0 0 1.22" rgba="0.15 0.16 0.18 1"/>
+    </body>
+    <body name="benchA" pos="-1.55 -1.2 0">
+      <geom type="box" size="1.10 0.34 0.44" pos="0 0 0.44" rgba="0.62 0.63 0.66 1"/>
+      <geom type="box" size="1.20 0.39 0.02" pos="0 0 0.90" rgba="0.28 0.30 0.34 1"/>
+    </body>
+    <body name="benchB" pos="1.55 -1.2 0">
+      <geom type="box" size="1.10 0.34 0.44" pos="0 0 0.44" rgba="0.62 0.63 0.66 1"/>
+      <geom type="box" size="1.20 0.39 0.02" pos="0 0 0.90" rgba="0.28 0.30 0.34 1"/>
+    </body>
+    <body name="benchC" pos="-1.55 1.2 0">
+      <geom type="box" size="1.10 0.34 0.44" pos="0 0 0.44" rgba="0.62 0.63 0.66 1"/>
+      <geom type="box" size="1.20 0.39 0.02" pos="0 0 0.90" rgba="0.28 0.30 0.34 1"/>
+    </body>
+    <body name="benchD" pos="1.55 1.2 0">
+      <geom type="box" size="1.10 0.34 0.44" pos="0 0 0.44" rgba="0.62 0.63 0.66 1"/>
+      <geom type="box" size="1.20 0.39 0.02" pos="0 0 0.90" rgba="0.28 0.30 0.34 1"/>
+    </body>
+    <body name="shelf" pos="0 3.4 0">
+      <geom type="box" size="0.02 0.30 0.90" pos="-1.3 0 0.90" rgba="0.35 0.35 0.38 1"/>
+      <geom type="box" size="0.02 0.30 0.90" pos="1.3 0 0.90" rgba="0.35 0.35 0.38 1"/>
+      <geom type="box" size="1.32 0.30 0.02" pos="0 0 0.55" rgba="0.5 0.5 0.53 1"/>
+      <geom type="box" size="1.32 0.30 0.02" pos="0 0 1.05" rgba="0.5 0.5 0.53 1"/>
+      <geom type="box" size="1.32 0.30 0.02" pos="0 0 1.55" rgba="0.5 0.5 0.53 1"/>
+      <geom type="box" size="0.14 0.14 0.11" pos="-0.8 0 0.68" rgba="0.7 0.6 0.35 1"/>
+      <geom type="box" size="0.12 0.12 0.10" pos="-0.2 0 0.67" rgba="0.6 0.35 0.3 1"/>
+      <geom type="box" size="0.13 0.13 0.11" pos="0.7 0 1.18" rgba="0.4 0.5 0.6 1"/>
+    </body>
+    <body name="h_centrifugeL_s" pos="-0.9500000000000001 1.2 0.92" euler="0 0 0">
+      <geom type="mesh" mesh="h_centrifugeL" rgba="0.88 0.89 0.90 1"/></body>
+    <body name="h_centrifugeW_s" pos="-2.15 -1.2 0.92" euler="0 0 0">
+      <geom type="mesh" mesh="h_centrifugeW" rgba="0.88 0.89 0.90 1"/></body>
+    <body name="h_centrifugeS_s" pos="2.1 1.2 0.92" euler="0 0 0">
+      <geom type="mesh" mesh="h_centrifugeS" rgba="0.88 0.89 0.90 1"/></body>
+    <body name="h_labrack_s" pos="1.0 1.2 0.92" euler="0 0 0">
+      <geom type="mesh" mesh="h_labrack" rgba="0.86 0.5 0.62 1"/></body>
+    <body name="h_fridge_s" pos="-3.4 -1.2 0.0" euler="0 0 0">
+      <geom type="mesh" mesh="h_fridge" rgba="0.88 0.89 0.90 1"/></body>
+    <body name="h_stool_s" pos="-0.7 -0.35 0.0" euler="0 0 0">
+      <geom type="mesh" mesh="h_stool" rgba="0.15 0.16 0.18 1"/></body>
+    <body name="flask_1" pos="-2.4 -1.1158529015192102 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.16 0.42 0.85 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="vial_2" pos="-2.1166666666666667 -1.157262011976617 0.925"><freejoint/>
+      <geom type="mesh" mesh="vial" rgba="0.25 0.70 0.42 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_3" pos="-1.8333333333333335 -1.2951602073889517 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.85 0.62 0.20 0.85" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_4" pos="-1.55 -1.2182162504272096 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.72 0.80 0.85 0.55" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_5" pos="-1.2666666666666666 -1.1001456654625394 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.55 0.30 0.70 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_6" pos="-0.9833333333333335 -1.207515112046181 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.2 0.7 0.75 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_7" pos="-0.7000000000000001 -1.2979177729151317 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.80 0.18 0.16 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="vial_8" pos="0.7000000000000001 -1.1090702573174318 0.925"><freejoint/>
+      <geom type="mesh" mesh="vial" rgba="0.25 0.70 0.42 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_9" pos="0.9833333333333334 -1.2529836140908492 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.85 0.62 0.20 0.85" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_10" pos="1.2666666666666666 -1.2772764487555988 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.72 0.80 0.85 0.55" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_11" pos="1.55 -1.1271030959874124 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.55 0.30 0.70 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_12" pos="1.8333333333333335 -1.1415082807108239 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.2 0.7 0.75 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_13" pos="2.1166666666666667 -1.287969575997167 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.80 0.18 0.16 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_14" pos="2.4 -1.2358229282236828 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.16 0.42 0.85 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_15" pos="-2.4 1.2141120008059867 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.85 0.62 0.20 0.85" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_16" pos="-2.1166666666666667 1.1000076742435898 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.72 0.80 0.85 0.55" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_17" pos="-1.8333333333333335 1.2116549204850493 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.55 0.30 0.70 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_18" pos="-1.55 1.2969889810845086 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.2 0.7 0.75 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_19" pos="-1.2666666666666666 1.163352087074807 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.80 0.18 0.16 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_20" pos="-0.9833333333333335 1.112454782531157 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.16 0.42 0.85 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="vial_21" pos="-0.7000000000000001 1.2592073514707223 0.925"><freejoint/>
+      <geom type="mesh" mesh="vial" rgba="0.25 0.70 0.42 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_22" pos="0.7000000000000001 1.124319750469207 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.72 0.80 0.85 0.55" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_23" pos="0.9833333333333334 1.1449314457402362 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.55 0.30 0.70 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_24" pos="1.2666666666666666 1.2898708095811626 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.2 0.7 0.75 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_25" pos="1.55 1.2319098362349352 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.80 0.18 0.16 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="flask_26" pos="1.8333333333333335 1.1019063769933508 0.925"><freejoint/>
+      <geom type="mesh" mesh="flask" rgba="0.16 0.42 0.85 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="vial_27" pos="2.1166666666666667 1.19336781026488 0.925"><freejoint/>
+      <geom type="mesh" mesh="vial" rgba="0.25 0.70 0.42 0.82" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="beaker_28" pos="2.4 1.2998026652716361 0.925"><freejoint/>
+      <geom type="mesh" mesh="beaker" rgba="0.85 0.62 0.20 0.85" density="900" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="rack_29" pos="0.9500000000000001 -1.18 0.925"><freejoint/>
+      <geom type="mesh" mesh="rack" rgba="0.22 0.22 0.26 1" density="700" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_30" pos="0.89 -1.18 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.80 0.18 0.16 0.82" density="600" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_31" pos="0.9500000000000001 -1.18 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.16 0.42 0.85 0.82" density="600" friction="1.0 0.02 0.001" condim="4"/></body>
+    <body name="tube_32" pos="1.01 -1.18 0.925"><freejoint/>
+      <geom type="mesh" mesh="tube" rgba="0.25 0.70 0.42 0.82" density="600" friction="1.0 0.02 0.001" condim="4"/></body>
+  </worldbody>
+</mujoco>

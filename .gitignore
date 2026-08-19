@@ -25,3 +25,20 @@ venv/
 # Cloned upstream deps (installed editable; large)
 third_party_src/
 .superpowers/
+
+# Vendored model/sim packages — large, EULA/upstream, keep local only
+IsaacGym_Preview_4_Package/
+sam3/
+sam-3d-objects/
+# Scraped reference images & local scratch (not project source)
+*-stockcake.jpg
+*-imagegoodgood.webp
+lab-room-design-2.png
+nces-bonus-shares-and-expansion-into-biologics.jpg
+vimta-lh-new-stock-option-allotment.jpg
+image22.jpeg
+images.jpeg
+REST3D.code-workspace
+.mcp.json
+MUJOCO_LOG.TXT
+skill-observations/
