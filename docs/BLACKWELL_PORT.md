@@ -23,10 +23,10 @@ Verified 2026-08-01:
 Re-check with `git status --porcelain --untracked-files=no` (expect only
 `.gitignore`) and `git merge-base --is-ancestor origin/master HEAD`.
 
-REST3D is **CC BY-NC 4.0 — NonCommercial**. Nothing here may be copied into a
-product repo. The separate project is `../a separate project`; this checkout
-exists to produce reference output to compare against, and to run the exporters.
-When baselining against it, the parity target is `output/<scene>/stage3/global_scene`
+REST3D is **CC BY-NC 4.0 — NonCommercial**. This fork exists for non-commercial
+research only: to run the published method on a 12 GB consumer GPU and to export its
+reconstructions to robotics simulators. Nothing here may be copied into a commercial
+product. The canonical output of a run is `output/<scene>/stage3/global_scene`
 — **never `global_scene_v2`, which is a hand-edit and not produced by any code here**
 (`grep -rn global_scene_v2` over this tree returns zero hits).
 

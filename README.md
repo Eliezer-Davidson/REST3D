@@ -1,3 +1,21 @@
+> ## 🔀 Research fork notice
+>
+> This is a personal **research fork** of [REST3D](https://github.com/ShirleyMaxx/REST3D)
+> by Xiaoxuan Ma et al. (Carnegie Mellon University), maintained by
+> **[Eliezer Davidson](https://github.com/Eliezer-Davidson)**.
+>
+> Changes vs upstream, both for non-commercial research only:
+> 1. **`blackwell-12gb` port** — runs the full published method on a single 12 GB
+>    consumer GPU (RTX 5070 Ti / Blackwell, CUDA 12.8), via deferred two-stage layout
+>    post-optimization.
+> 2. **Simulator export** — exporters that carry REST3D reconstructions into robotics
+>    simulators (MuJoCo / Isaac) as physics scenes.
+>
+> All credit for the method and code belongs to the original authors. This fork is used
+> strictly under the upstream [CC BY-NC 4.0 license](LICENSE): **non-commercial research
+> only**, with attribution; no affiliation with or endorsement by the original authors is
+> implied.
+
 # REST3D: Reconstructing Physically Stable 3D Scenes from a Single Image
 
 <p align="center">
