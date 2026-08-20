@@ -2,7 +2,7 @@
 >
 > This is a personal **research fork** of [REST3D](https://github.com/ShirleyMaxx/REST3D)
 > by Xiaoxuan Ma et al. (Carnegie Mellon University), maintained by
-> **[Eliezer Davidson](https://github.com/Eliezer-Davidson)**.
+> **Eliezer Davidson**.
 >
 > Changes vs upstream, both for non-commercial research only:
 > 1. **`blackwell-12gb` port** — runs the full published method on a single 12 GB
