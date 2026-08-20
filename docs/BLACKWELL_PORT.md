@@ -26,7 +26,9 @@ Re-check with `git status --porcelain --untracked-files=no` (expect only
 REST3D is **CC BY-NC 4.0 — NonCommercial**. This fork exists for non-commercial
 research only: to run the published method on a 12 GB consumer GPU and to export its
 reconstructions to robotics simulators. Nothing here may be copied into a commercial
-product. The canonical output of a run is `output/<scene>/stage3/global_scene`
+product or a product repo. The clean-room reimplementation is `../MONOLITHCLE`; this
+checkout also produces reference output to compare against. The canonical output of a
+run — and the parity target when baselining — is `output/<scene>/stage3/global_scene`
 — **never `global_scene_v2`, which is a hand-edit and not produced by any code here**
 (`grep -rn global_scene_v2` over this tree returns zero hits).
 
