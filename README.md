@@ -16,7 +16,15 @@
 > only**, with attribution; no affiliation with or endorsement by the original authors is
 > implied.
 
-# REST3D: Reconstructing Physically Stable 3D Scenes from a Single Image
+# EDSRest3d
+
+**Eliezer Davidson's research adaptation of REST3D — runs the full method on a 12 GB
+consumer GPU and exports reconstructed scenes into robotics simulators (MuJoCo / Isaac).**
+📦 Install: [INSTALL-EDS.md](INSTALL-EDS.md) · 📖 Use: [USAGE-EDS.md](USAGE-EDS.md) · 🔧 Port details: [docs/BLACKWELL_PORT.md](docs/BLACKWELL_PORT.md)
+
+---
+
+## Upstream: REST3D — Reconstructing Physically Stable 3D Scenes from a Single Image
 
 <p align="center">
   <a href="https://shirleymaxx.github.io/">Xiaoxuan Ma</a>&emsp;
