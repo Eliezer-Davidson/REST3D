@@ -1,0 +1,352 @@
+diff --git a/sam3d_objects/__init__.py b/sam3d_objects/__init__.py
+index a700544..403e03b 100644
+--- a/sam3d_objects/__init__.py
++++ b/sam3d_objects/__init__.py
+@@ -1,6 +1,6 @@
+ # Copyright (c) Meta Platforms, Inc. and affiliates.
+ import os
+ 
+-# Allow skipping initialization for lightweight tools
+-if not os.environ.get('LIDRA_SKIP_INIT'):
+-    import sam3d_objects.init
++# # Allow skipping initialization for lightweight tools
++# if not os.environ.get('LIDRA_SKIP_INIT'):
++#     import sam3d_objects.init
+diff --git a/sam3d_objects/model/io.py b/sam3d_objects/model/io.py
+index 9d05de6..4cb0fe7 100644
+--- a/sam3d_objects/model/io.py
++++ b/sam3d_objects/model/io.py
+@@ -197,7 +197,31 @@ def load_model_from_checkpoint(
+     model.load_state_dict(state_dict, strict=strict)
+ 
+     if device is not None:
+-        model = model.to(device)
++        # REST3D_CPU_OFFLOAD=1: park weights in system RAM instead of VRAM. The pipeline's
++        # _rest3d_offload() pages each model onto the GPU for the phase that needs it. This
++        # keeps construction from exhausting a 12GB card (upstream assumes >=32GB) and is
++        # numerically lossless, since a device move changes no values.
++        if os.environ.get("REST3D_CPU_OFFLOAD") == "1":
++            model = model.to("cpu")
++        else:
++            model = model.to(device)
++
++    # REST3D low-VRAM opt-in (REST3D_HALF_WEIGHTS=1): keep weights resident in fp16.
++    # Upstream requires >=32GB VRAM; the checkpoints load as fp32 because pipeline.yaml's
++    # `dtype: float16` only selects the autocast dtype for compute, not the stored weights.
++    # Halving resident weights (~10.3GB -> ~5.2GB) lets the pipeline fit on a 12GB card.
++    # UNSANCTIONED by upstream: verify output geometry is not degraded / NaN.
++    if os.environ.get("REST3D_HALF_WEIGHTS") == "1":
++        _cls = type(model).__name__
++        # Generators run under torch.autocast (which reconciles mixed dtypes), but the
++        # decoders are invoked outside autocast (inference_pipeline.decode_slat), where
++        # fp16 weights + fp32 activations raise "mat1 and mat2 must have the same dtype".
++        # The decoders are small (~0.85GB fp32 total), so keep them at full precision.
++        if "Decoder" in _cls:
++            logger.info(f"[REST3D] keeping fp32 (runs outside autocast): {_cls}")
++        else:
++            model = model.half()
++            logger.info(f"[REST3D] weights cast to fp16: {_cls}")
+ 
+     if freeze:
+         for param in model.parameters():
+diff --git a/sam3d_objects/pipeline/deferred_postopt.py b/sam3d_objects/pipeline/deferred_postopt.py
+new file mode 100644
+index 0000000..d72e22c
+--- /dev/null
++++ b/sam3d_objects/pipeline/deferred_postopt.py
+@@ -0,0 +1,45 @@
++# Deferred layout post-optimization runner (12 GB enablement, 2026-08-12).
++#
++# Counterpart to the SAM3D_DEFER_LAYOUT_POSTOPT_DIR capture mode in
++# inference_pipeline_pointmap.py: a bundle file holds the EXACT inputs the
++# in-loop call to InferencePipelinePointMap.run_post_optimization_GS would
++# have received; this module replays that call after the caller has released
++# the multi-GB model stack, so the optimization (which needs only ~1-2 GB)
++# never co-resides with the models. The math is identical by construction:
++# same function, same inputs, and layout_post_optimization_method_GS seeds
++# its own RNG (seed=100), so replays are deterministic.
++"""Run a captured layout post-opt bundle standalone."""
++import types
++
++import torch
++
++from sam3d_objects.pipeline.inference_pipeline_pointmap import InferencePipelinePointMap
++from sam3d_objects.pipeline.inference_utils import layout_post_optimization_method_GS
++
++
++def run_deferred_postopt(bundle_path: str, device: str | None = None) -> dict:
++    """Load a capture bundle and run the deferred GS layout post-optimization.
++
++    Returns run_post_optimization_GS's dict verbatim:
++    {rotation, translation, scale, iou, iou_before_optim, optim_accepted}.
++    """
++    if device is None:
++        device = "cuda" if torch.cuda.is_available() else "cpu"
++    bundle = torch.load(bundle_path, map_location=device, weights_only=False)
++
++    # run_post_optimization_GS only touches self.device, self.refine_scale and
++    # self.layout_post_optimization_method_GS -- a shim stands in for the
++    # pipeline so no model ever loads here.
++    shim = types.SimpleNamespace(
++        device=torch.device(device),
++        layout_post_optimization_method_GS=layout_post_optimization_method_GS,
++        refine_scale=lambda s: InferencePipelinePointMap.refine_scale(None, s),
++    )
++    return InferencePipelinePointMap.run_post_optimization_GS(
++        shim,
++        bundle["gs"],
++        bundle["intrinsics"],
++        bundle["pose"],
++        bundle["layout_input"],
++        backend=bundle.get("backend", "gsplat"),
++    )
+diff --git a/sam3d_objects/pipeline/inference_pipeline.py b/sam3d_objects/pipeline/inference_pipeline.py
+index d34d5c2..bb050a5 100644
+--- a/sam3d_objects/pipeline/inference_pipeline.py
++++ b/sam3d_objects/pipeline/inference_pipeline.py
+@@ -50,6 +50,114 @@ from sam3d_objects.model.backbone.tdfy_dit.utils import postprocessing_utils
+ from safetensors.torch import load_file
+ 
+ 
++def _rest3d_offload(pipeline, keep):
++    """REST3D low-VRAM helper. Enabled only when REST3D_CPU_OFFLOAD=1.
++
++    Upstream requires >=32GB VRAM because every model in ``pipeline.models`` stays
++    resident on the GPU for the whole run. This pages the models not needed by the
++    current phase out to system RAM and pages the needed ones back in, trading PCIe
++    transfer time for VRAM. Moving a tensor between devices does not change its
++    values, so this is numerically lossless (unlike casting weights to fp16).
++
++    No-op when the env var is unset, so stock behaviour is unchanged.
++    """
++    if os.environ.get("REST3D_CPU_OFFLOAD") != "1":
++        return
++    models = getattr(pipeline, "models", None)
++    if models is None:
++        return
++    keep = set(keep)
++    device = getattr(pipeline, "device", "cuda")
++    to_gpu, to_cpu = [], []
++    for name, module in models.items():
++        # entries can be None (optional decoders, e.g. slat_decoder_rf) or parameterless
++        if module is None or not hasattr(module, "parameters"):
++            continue
++        param = next(module.parameters(), None)
++        if param is None:
++            continue
++        on_gpu = param.device.type == "cuda"
++        if name in keep and not on_gpu:
++            module.to(device)
++            to_gpu.append(name)
++        elif name not in keep and on_gpu:
++            module.to("cpu")
++            to_cpu.append(name)
++    # Auxiliary modules live outside `models` -- condition_embedders is a plain dict, and
++    # pose_decoder is a bare attribute -- so the loop above never sees them. They are small
++    # and used by nearly every phase, so keep them permanently GPU-resident; otherwise the
++    # load-time offload strands them on CPU and forward() raises a device mismatch.
++    aux = []
++    embedders = getattr(pipeline, "condition_embedders", None)
++    if isinstance(embedders, dict):
++        aux.extend(embedders.values())
++    elif embedders is not None:
++        aux.append(embedders)
++    pose_decoder = getattr(pipeline, "pose_decoder", None)
++    if pose_decoder is not None:
++        aux.append(pose_decoder)
++    for module in aux:
++        if module is None or not hasattr(module, "parameters"):
++            continue
++        param = next(module.parameters(), None)
++        if param is not None and param.device.type != "cuda":
++            module.to(device)
++            to_gpu.append(type(module).__name__)
++
++    if to_gpu or to_cpu:
++        torch.cuda.empty_cache()
++        logger.info(f"[REST3D offload] ->GPU {to_gpu} | ->CPU {to_cpu}")
++
++
++def _rest3d_move_aux(pipeline, to_gpu):
++    """REST3D low-VRAM helper (REST3D_OFFLOAD_EMBEDDER=1). Page the modules that are idle
++    during mesh decode -- the two generators + ss_encoder (the big ~5.4GB chunk) and the
++    aux modules (condition_embedders + pose_decoder) -- between GPU and CPU.
++
++    This differs from the full REST3D_CPU_OFFLOAD in one crucial way: it does NOT load models
++    into system RAM at construction time. With REST3D_CPU_CONSTRUCT the models are built on
++    CPU and settle on the GPU, so RAM stays near the desktop baseline; this helper only puts
++    the generators in RAM transiently DURING mesh decode (freed again at the next object's
++    sample_sparse_structure). That fits the ~16GB of free RAM, whereas the full offload stacks
++    every model in RAM from load time and OS-OOM-kills this 30GB box. Freeing the generators'
++    ~5.4GB of VRAM leaves ample room for the dense mesh-extraction grid on a 12GB card.
++    No-op when the var is unset.
++    """
++    if os.environ.get("REST3D_OFFLOAD_EMBEDDER") != "1":
++        return
++    target = (getattr(pipeline, "device", "cuda") if to_gpu else "cpu")
++    mods = []
++    # Big idle-at-decode modules: the generators (done once sampling finishes) and ss_encoder
++    # (never used on the sampling inference path). These are the ~5.4GB that must leave the GPU.
++    models = getattr(pipeline, "models", None)
++    if models is not None:
++        for _name in ("ss_generator", "slat_generator", "ss_encoder"):
++            _m = models[_name] if _name in models else None
++            if _m is not None:
++                mods.append(_m)
++    embedders = getattr(pipeline, "condition_embedders", None)
++    if isinstance(embedders, dict):
++        mods.extend(embedders.values())
++    elif embedders is not None:
++        mods.append(embedders)
++    pose_decoder = getattr(pipeline, "pose_decoder", None)
++    if pose_decoder is not None:
++        mods.append(pose_decoder)
++    moved = []
++    for module in mods:
++        if module is None or not hasattr(module, "parameters"):
++            continue
++        param = next(module.parameters(), None)
++        if param is None:
++            continue
++        if (param.device.type == "cuda") != to_gpu:
++            module.to(target)
++            moved.append(type(module).__name__)
++    if moved:
++        torch.cuda.empty_cache()
++        logger.info(f"[REST3D aux] ->{'GPU' if to_gpu else 'CPU'} {moved}")
++
++
+ class InferencePipeline:
+     def __init__(
+         self,
+@@ -266,9 +374,19 @@ class InferencePipeline:
+         ckpt_path,
+         state_dict_fn=None,
+         state_dict_key="state_dict",
+-        device="cuda", 
++        device="cuda",
+     ):
+-        model = instantiate(config)
++        # REST3D_CPU_CONSTRUCT=1: build the module on CPU instead of under the enclosing
++        # `with self.device:` (GPU) context. Construction otherwise materialises each model
++        # in fp32 on the GPU *before* it is loaded and cast to fp16, a transient spike that
++        # OOMs a 12GB card shared with the desktop. Building on CPU keeps the fp32 form in
++        # system RAM (one model at a time, ~6GB, well within budget); only the final fp16
++        # weights are moved to the GPU by the `model.to(device)` below.
++        if os.environ.get("REST3D_CPU_CONSTRUCT") == "1":
++            with torch.device("cpu"):
++                model = instantiate(config)
++        else:
++            model = instantiate(config)
+ 
+         if ckpt_path.endswith(".safetensors"):
+             state_dict = load_file(ckpt_path, device="cuda")
+@@ -287,7 +405,13 @@ class InferencePipeline:
+                 state_dict_key=state_dict_key,
+                 state_dict_fn=state_dict_fn,
+             )
+-        model = model.to(device)
++        # REST3D_CPU_OFFLOAD=1: leave the model in system RAM; _rest3d_offload() pages it
++        # onto the GPU for the phase that needs it. Every model loads through this method,
++        # so this is the single chokepoint that keeps construction off a 12GB card.
++        if os.environ.get("REST3D_CPU_OFFLOAD") == "1":
++            model = model.to("cpu")
++        else:
++            model = model.to(device)
+ 
+         return model
+ 
+@@ -604,6 +728,16 @@ class InferencePipeline:
+             dict: The decoded structured latent.
+         """
+         logger.info("Decoding sparse latent...")
++        # REST3D_CPU_OFFLOAD=1: the generators are finished by the time we decode, but they
++        # stay resident (~10.8GB of checkpoints) and starve mesh extraction, which needs a
++        # ~1.3GB dense voxel grid. Page them out to system RAM first. This is numerically
++        # lossless (a device move changes no values) -- unlike reducing precision.
++        _rest3d_offload(self, keep=["slat_decoder_mesh", "slat_decoder_gs", "slat_decoder_gs_4"])
++        # REST3D_OFFLOAD_EMBEDDER=1: the condition embedder is idle during decode; free its
++        # ~1GB of VRAM so the dense mesh-extraction grid fits on a 12GB card. Restored at the
++        # next object's sample_sparse_structure. RAM-safe (only ~1GB), unlike offloading the
++        # multi-GB generators.
++        _rest3d_move_aux(self, to_gpu=False)
+         ret = {}
+         with torch.no_grad():
+             if "mesh" in formats:
+@@ -644,6 +778,10 @@ class InferencePipeline:
+     def sample_sparse_structure(
+         self, ss_input_dict: dict, inference_steps=None, use_distillation=False
+     ):
++        # First phase of each object: bring the aux modules (embedder/pose_decoder) back onto
++        # the GPU (they were freed during the previous object's mesh decode).
++        _rest3d_move_aux(self, to_gpu=True)
++        _rest3d_offload(self, keep=["ss_generator", "ss_decoder"])
+         ss_generator = self.models["ss_generator"]
+         ss_decoder = self.models["ss_decoder"]
+         if use_distillation:
+@@ -729,6 +867,7 @@ class InferencePipeline:
+     ) -> sp.SparseTensor:
+         image = slat_input["image"]
+         DEVICE = image.device
++        _rest3d_offload(self, keep=["slat_generator"])
+         slat_generator = self.models["slat_generator"]
+         latent_shape = (image.shape[0],) + (coords.shape[0], 8)
+         prev_inference_steps = slat_generator.inference_steps
+diff --git a/sam3d_objects/pipeline/inference_pipeline_pointmap.py b/sam3d_objects/pipeline/inference_pipeline_pointmap.py
+index f557834..0053302 100644
+--- a/sam3d_objects/pipeline/inference_pipeline_pointmap.py
++++ b/sam3d_objects/pipeline/inference_pipeline_pointmap.py
+@@ -469,16 +469,43 @@ class InferencePipelinePointMap(InferencePipeline):
+                         gs_input is not None
+                         and self.layout_post_optimization_method_GS is not None
+                     ):
+-                        logger.info("Running GS layout post optimization method...")
+-                        postprocessed_pose = self.run_post_optimization_GS(
+-                            deepcopy(gs_input[0]),
+-                            pointmap_dict["intrinsics"],
+-                            ss_return_dict,
+-                            ss_input_dict,
+-                            backend="gsplat",
+-                        )
+-                        ss_return_dict.update(postprocessed_pose)
+-                        logger.info(f"Finished GS post-optimization!")
++                        # SAM3D_DEFER_LAYOUT_POSTOPT_DIR (12 GB enablement, 2026-08-12):
++                        # capture the EXACT inputs of run_post_optimization_GS to a
++                        # bundle file instead of optimizing here, so the caller can
++                        # replay the identical computation after the model stack is
++                        # released (deferred_postopt.run_deferred_postopt). The
++                        # optimization itself needs ~1-2 GB; running it in-loop while
++                        # the models are resident is what OOMs a 12 GB card. With the
++                        # env var unset this branch is byte-identical to upstream.
++                        import os as _os
++                        _defer_dir = _os.environ.get("SAM3D_DEFER_LAYOUT_POSTOPT_DIR")
++                        if _defer_dir:
++                            from uuid import uuid4
++                            _os.makedirs(_defer_dir, exist_ok=True)
++                            _bp = _os.path.join(_defer_dir, f"{uuid4().hex}.pt")
++                            torch.save({
++                                "gs": gs_input[0],
++                                "intrinsics": pointmap_dict["intrinsics"],
++                                "pose": {k: ss_return_dict[k]
++                                         for k in ("rotation", "translation", "scale")},
++                                "layout_input": {k: ss_input_dict[k]
++                                                 for k in ("rgb_image_mask", "rgb_image",
++                                                           "rgb_pointmap_unnorm")},
++                                "backend": "gsplat",
++                            }, _bp)
++                            ss_return_dict["postopt_deferred"] = _bp
++                            logger.info(f"Layout post-opt DEFERRED -> {_bp}")
++                        else:
++                            logger.info("Running GS layout post optimization method...")
++                            postprocessed_pose = self.run_post_optimization_GS(
++                                deepcopy(gs_input[0]),
++                                pointmap_dict["intrinsics"],
++                                ss_return_dict,
++                                ss_input_dict,
++                                backend="gsplat",
++                            )
++                            ss_return_dict.update(postprocessed_pose)
++                            logger.info(f"Finished GS post-optimization!")
+                     elif (
+                         glb is not None
+                         and self.layout_post_optimization_method is not None
